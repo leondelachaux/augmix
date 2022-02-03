@@ -193,7 +193,7 @@ def train(net, train_loader, optimizer, scheduler):
     targets1 = targets1.cuda()
     targets2 = targets2.cuda()
     logits = net(images)
-    loss = F.cross_entropy(logits, targets1, targets2, lam)
+    loss = mixup_criterion(logits, targets1, targets2, lam)
 
     loss.backward()
     optimizer.step()
