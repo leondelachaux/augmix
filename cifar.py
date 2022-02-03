@@ -32,6 +32,8 @@ from third_party.ResNeXt_DenseNet.models.densenet import densenet
 from third_party.ResNeXt_DenseNet.models.resnext import resnext29
 from third_party.WideResNet_pytorch.wideresnet import WideResNet
 
+import torch.nn as nn
+
 import torch
 import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
