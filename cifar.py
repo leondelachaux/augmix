@@ -13,10 +13,8 @@
 # limitations under the License.
 # ==============================================================================
 """Main script to launch AugMix training on CIFAR-10/100.
-
 Supports WideResNet, AllConv, ResNeXt models on CIFAR-10 and CIFAR-100 as well
 as evaluation on CIFAR-10-C and CIFAR-100-C.
-
 Example usage:
   `python cifar.py`
 """
@@ -149,91 +147,53 @@ def get_lr(step, total_steps, lr_max, lr_min):
                                              np.cos(step / total_steps * np.pi))
 
 
-def aug(image, preprocess):
+def aug(image1, image2, preprocess):
   """Perform AugMix augmentations and compute mixture.
-
   Args:
     image: PIL.Image input image
     preprocess: Preprocessing function which should return a torch tensor.
-
   Returns:
     mixed: Augmented and mixed image.
   """
-  aug_list = augmentations.augmentations
-  if args.all_ops:
-    aug_list = augmentations.augmentations_all
-
-  ws = np.float32(np.random.dirichlet([1] * args.mixture_width))
   m = np.float32(np.random.beta(1, 1))
 
-  mix = torch.zeros_like(preprocess(image))
-  for i in range(args.mixture_width):
-    image_aug = image.copy()
-    depth = args.mixture_depth if args.mixture_depth > 0 else np.random.randint(
-        1, 4)
-    for _ in range(depth):
-      op = np.random.choice(aug_list)
-      image_aug = op(image_aug, args.aug_severity)
-    # Preprocessing commutes since all coefficients are convex
-    mix += ws[i] * preprocess(image_aug)
-
-  mixed = (1 - m) * preprocess(image) + m * mix
-  return mixed
+  mixed = (1 - m) * preprocess(image1) + m * preprocess(image2)
+  return mixed, m
 
 
 class AugMixDataset(torch.utils.data.Dataset):
   """Dataset wrapper to perform AugMix augmentation."""
-
   def __init__(self, dataset, preprocess, no_jsd=False):
     self.dataset = dataset
     self.preprocess = preprocess
     self.no_jsd = no_jsd
+    self.index = torch.randperm(len(self.dataset))
 
   def __getitem__(self, i):
-    x, y = self.dataset[i]
-    if self.no_jsd:
-      return aug(x, self.preprocess), y
-    else:
-      im_tuple = (self.preprocess(x), aug(x, self.preprocess),
-                  aug(x, self.preprocess))
-      return im_tuple, y
+    x1, y1 = self.dataset[i]
+    x2, y2 = self.dataset[self.index[i]]
+
+    return aug(x1, x2, self.preprocess), y1, y2
 
   def __len__(self):
     return len(self.dataset)
+
+def mixup_criterion(pred, y_a, y_b, lam):
+  criterion = nn.CrossEntropyLoss()
+  return lam * criterion(pred, y_a) + (1 - lam) * criterion(pred, y_b)
 
 
 def train(net, train_loader, optimizer, scheduler):
   """Train for one epoch."""
   net.train()
   loss_ema = 0.
-  for i, (images, targets) in enumerate(train_loader):
+  for i, (images, lam, targets1, targets2) in enumerate(train_loader):
     optimizer.zero_grad()
-
-    if args.no_jsd:
-      images = images.cuda()
-      targets = targets.cuda()
-      logits = net(images)
-      loss = F.cross_entropy(logits, targets)
-    else:
-      images_all = torch.cat(images, 0).cuda()
-      targets = targets.cuda()
-      logits_all = net(images_all)
-      logits_clean, logits_aug1, logits_aug2 = torch.split(
-          logits_all, images[0].size(0))
-
-      # Cross-entropy is only computed on clean images
-      loss = F.cross_entropy(logits_clean, targets)
-
-      p_clean, p_aug1, p_aug2 = F.softmax(
-          logits_clean, dim=1), F.softmax(
-              logits_aug1, dim=1), F.softmax(
-                  logits_aug2, dim=1)
-
-      # Clamp mixture distribution to avoid exploding KL divergence
-      p_mixture = torch.clamp((p_clean + p_aug1 + p_aug2) / 3., 1e-7, 1).log()
-      loss += 12 * (F.kl_div(p_mixture, p_clean, reduction='batchmean') +
-                    F.kl_div(p_mixture, p_aug1, reduction='batchmean') +
-                    F.kl_div(p_mixture, p_aug2, reduction='batchmean')) / 3.
+    images = images.cuda()
+    targets1 = targets1.cuda()
+    targets2 = targets2.cuda()
+    logits = net(images)
+    loss = F.cross_entropy(logits, targets1, targets2, lam)
 
     loss.backward()
     optimizer.step()
