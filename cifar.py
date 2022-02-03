@@ -187,7 +187,7 @@ def train(net, train_loader, optimizer, scheduler):
   """Train for one epoch."""
   net.train()
   loss_ema = 0.
-  for i, (images, lam, targets1, targets2) in enumerate(train_loader):
+  for i, ((images, lam), targets1, targets2) in enumerate(train_loader):
     optimizer.zero_grad()
     images = images.cuda()
     targets1 = targets1.cuda()
